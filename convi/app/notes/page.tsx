@@ -6,9 +6,10 @@ import { createClient } from "@/lib/supabase/client";
 
 type Book = { id: string; title: string; color: string };
 
-const btn = "rounded-lg border border-gray-400 px-3 py-2 text-sm";
+const btn =
+  "inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-400 px-4 text-sm";
 const input =
-  "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent p-3";
+  "w-full min-h-11 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 text-base";
 
 export default function NotesPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -49,15 +50,15 @@ export default function NotesPage() {
   }
 
   return (
-    <main className="min-h-screen p-6 max-w-2xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Notes</h1>
+    <main className="mx-auto min-h-dvh w-full max-w-2xl space-y-4 px-4 py-6 sm:px-6">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold sm:text-3xl">Notes</h1>
         <Link href="/dashboard" className={btn}>Back</Link>
       </div>
 
       <form onSubmit={addBook} className="flex gap-2">
         <input
-          className={input}
+          className={`${input} min-w-0 flex-1`}
           placeholder="New book title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -66,10 +67,10 @@ export default function NotesPage() {
           type="color"
           value={color}
           onChange={(e) => setColor(e.target.value)}
-          className="h-12 w-14 rounded-lg border border-gray-300 bg-transparent p-1"
+          className="h-11 w-12 shrink-0 rounded-lg border border-gray-300 bg-transparent p-1"
           aria-label="Book color"
         />
-        <button className="rounded-lg bg-indigo-600 px-4 text-white whitespace-nowrap">
+        <button className="min-h-11 shrink-0 rounded-lg bg-indigo-600 px-4 font-medium text-white">
           + Add
         </button>
       </form>
@@ -80,18 +81,23 @@ export default function NotesPage() {
         {books.map((b) => (
           <li
             key={b.id}
-            className="flex items-center justify-between rounded-2xl border border-gray-300 dark:border-gray-700 p-4"
+            className="flex items-center gap-2 rounded-2xl border border-gray-300 dark:border-gray-700 p-2 pl-4"
             style={{ borderLeft: `8px solid ${b.color}` }}
           >
-            <Link href={`/notes/${b.id}`} className="flex-1 font-semibold">
+            <Link
+              href={`/notes/${b.id}`}
+              className="flex min-h-11 min-w-0 flex-1 items-center truncate font-semibold"
+            >
               📖 {b.title}
             </Link>
-            <button className={btn + " text-red-500"} onClick={() => removeBook(b)}>
+            <button className={`${btn} text-red-500`} onClick={() => removeBook(b)}>
               Delete
             </button>
           </li>
         ))}
-        {books.length === 0 && <p className="text-gray-500">No books yet. Create your first one above.</p>}
+        {books.length === 0 && (
+          <p className="text-gray-500">No books yet. Create your first one above.</p>
+        )}
       </ul>
     </main>
   );

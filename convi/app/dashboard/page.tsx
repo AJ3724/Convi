@@ -22,34 +22,31 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
+  const bigBtn =
+    "flex min-h-14 items-center justify-center rounded-xl bg-indigo-600 px-4 text-lg font-medium text-white";
+
   return (
-    <main className="min-h-screen p-6 max-w-2xl mx-auto space-y-4">
-      <h1 className="text-3xl font-bold">Convi</h1>
-      <p>Signed in as {user.email}</p>
-      <p>
+    <main className="mx-auto min-h-dvh w-full max-w-2xl space-y-4 px-4 py-6 sm:px-6">
+      <h1 className="text-2xl font-bold sm:text-3xl">Convi</h1>
+      <p className="break-all text-sm sm:text-base">Signed in as {user.email}</p>
+      <p className="text-sm text-gray-500">
         Database check:{" "}
         {error ? `Error: ${error.message}` : `OK, ${count} books`}
       </p>
 
-      <div className="flex gap-2">
-        <Link
-          href="/notes"
-          className="inline-block rounded-lg bg-indigo-600 px-4 py-2 text-white"
-        >
-          Notes
+      <div className="grid grid-cols-2 gap-3">
+        <Link href="/notes" className={bigBtn}>
+          📖 Notes
         </Link>
-        <Link
-          href="/contacts"
-          className="inline-block rounded-lg bg-indigo-600 px-4 py-2 text-white"
-        >
-          Contacts
+        <Link href="/contacts" className={bigBtn}>
+          👤 Contacts
         </Link>
       </div>
 
       <EnableNotifications />
 
       <form action={signOut}>
-        <button className="rounded-lg border border-gray-400 px-4 py-2">
+        <button className="min-h-11 w-full rounded-lg border border-gray-400 px-4 sm:w-auto">
           Log out
         </button>
       </form>

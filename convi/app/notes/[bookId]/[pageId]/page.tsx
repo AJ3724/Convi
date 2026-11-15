@@ -21,9 +21,10 @@ type Bubble = {
 // PostgREST may return a 1-to-1 relation as an object or an array
 const one = <T,>(x: One<T>): T | null => (Array.isArray(x) ? x[0] ?? null : x);
 
-const btn = "rounded-lg border border-gray-400 px-3 py-2 text-sm";
+const btn =
+  "inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-400 px-4 text-sm";
 const input =
-  "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent p-3";
+  "w-full min-h-11 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 text-base";
 
 const typeStyle: Record<BubbleType, string> = {
   text: "bg-indigo-100 dark:bg-indigo-950",
@@ -150,144 +151,146 @@ export default function EditorPage() {
   const needsDate = type === "task" || type === "reminder";
 
   return (
-    <main className="min-h-screen p-6 max-w-2xl mx-auto space-y-4 pb-48">
-      <div className="flex items-center gap-2">
-        <input
-          key={pageTitle}
-          defaultValue={pageTitle}
-          onBlur={(e) => renamePage(e.target.value)}
-          className="flex-1 bg-transparent text-3xl font-bold outline-none"
-          aria-label="Page title"
-        />
-        <Link href={`/notes/${bookId}`} className={btn}>Back</Link>
-      </div>
+    <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col">
+      <div className="flex-1 space-y-4 px-4 py-6 sm:px-6">
+        <div className="flex items-center gap-2">
+          <input
+            key={pageTitle}
+            defaultValue={pageTitle}
+            onBlur={(e) => renamePage(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-2xl font-bold outline-none sm:text-3xl"
+            aria-label="Page title"
+          />
+          <Link href={`/notes/${bookId}`} className={btn}>Back</Link>
+        </div>
 
-      {error && <p className="text-sm text-red-500">{error}</p>}
+        {error && <p className="text-sm text-red-500">{error}</p>}
 
-      <ul className="space-y-3">
-        {bubbles.map((b) => {
-          const task = one(b.task_details);
-          const reminder = one(b.reminder_details);
-          const link = one(b.link_details);
+        <ul className="space-y-3">
+          {bubbles.map((b) => {
+            const task = one(b.task_details);
+            const reminder = one(b.reminder_details);
+            const link = one(b.link_details);
 
-          return (
-            <li key={b.id} className={`group rounded-2xl p-4 ${typeStyle[b.type]}`}>
-              <div className="flex items-start gap-3">
-                {b.type === "task" && (
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-5 w-5"
-                    checked={task?.is_done ?? false}
-                    onChange={(e) => toggleTask(b, e.target.checked)}
-                  />
-                )}
-                {b.type === "reminder" && <span>🔔</span>}
-                {b.type === "link" && link?.favicon_url && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={link.favicon_url} alt="" className="mt-1 h-5 w-5" />
-                )}
-
-                <div className="flex-1 min-w-0">
-                  {b.type === "link" && link ? (
-                    <a
-                      href={link.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block truncate font-medium underline"
-                    >
-                      {link.title ?? link.url}
-                      <span className="block truncate text-xs font-normal text-gray-500 no-underline">
-                        {link.url}
-                      </span>
-                    </a>
-                  ) : (
-                    <textarea
-                      defaultValue={b.content}
-                      onBlur={(e) => saveText(b, e.target.value)}
-                      rows={Math.max(1, b.content.split("\n").length)}
-                      className={`w-full resize-none bg-transparent outline-none ${
-                        task?.is_done ? "line-through opacity-60" : ""
-                      }`}
+            return (
+              <li key={b.id} className={`rounded-2xl p-4 ${typeStyle[b.type]}`}>
+                <div className="flex items-start gap-3">
+                  {b.type === "task" && (
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-6 w-6 shrink-0"
+                      checked={task?.is_done ?? false}
+                      onChange={(e) => toggleTask(b, e.target.checked)}
                     />
                   )}
+                  {b.type === "reminder" && <span className="shrink-0">🔔</span>}
+                  {b.type === "link" && link?.favicon_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={link.favicon_url} alt="" className="mt-1 h-5 w-5 shrink-0" />
+                  )}
 
-                  {task?.due_at && (
-                    <p className="text-xs text-gray-600 dark:text-gray-400">
-                      Due {new Date(task.due_at).toLocaleString()}
-                    </p>
-                  )}
-                  {reminder && (
-                    <p className="text-xs text-gray-600 dark:text-gray-400">
-                      {new Date(reminder.remind_at).toLocaleString()}
-                      {reminder.is_sent ? " · sent" : ""}
-                    </p>
-                  )}
+                  <div className="min-w-0 flex-1">
+                    {b.type === "link" && link ? (
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate font-medium underline"
+                      >
+                        {link.title ?? link.url}
+                        <span className="block truncate text-xs font-normal text-gray-500 no-underline">
+                          {link.url}
+                        </span>
+                      </a>
+                    ) : (
+                      <textarea
+                        defaultValue={b.content}
+                        onBlur={(e) => saveText(b, e.target.value)}
+                        rows={Math.max(1, b.content.split("\n").length)}
+                        className={`w-full resize-none bg-transparent text-base outline-none ${
+                          task?.is_done ? "line-through opacity-60" : ""
+                        }`}
+                      />
+                    )}
+
+                    {task?.due_at && (
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        Due {new Date(task.due_at).toLocaleString()}
+                      </p>
+                    )}
+                    {reminder && (
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {new Date(reminder.remind_at).toLocaleString()}
+                        {reminder.is_sent ? " · sent" : ""}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => removeBubble(b)}
+                    className="-m-2 shrink-0 p-2 text-gray-500 hover:text-red-500"
+                    aria-label="Delete bubble"
+                  >
+                    ✕
+                  </button>
                 </div>
+              </li>
+            );
+          })}
+          {bubbles.length === 0 && (
+            <p className="text-gray-500">Empty page. Add your first bubble below.</p>
+          )}
+        </ul>
+      </div>
 
-                <button
-                  onClick={() => removeBubble(b)}
-                  className="text-gray-500 hover:text-red-500"
-                  aria-label="Delete bubble"
-                >
-                  ✕
-                </button>
-              </div>
-            </li>
-          );
-        })}
-        {bubbles.length === 0 && (
-          <p className="text-gray-500">Empty page. Add your first bubble below.</p>
-        )}
-      </ul>
-
-      {/* Composer pinned to the bottom */}
+      {/* Composer: sticks to the bottom of the screen */}
       <form
         onSubmit={addBubble}
-        className="fixed bottom-0 left-0 right-0 border-t border-gray-300 dark:border-gray-700 bg-white dark:bg-zinc-900 p-4"
+        className="sticky bottom-0 space-y-2 border-t border-gray-300 bg-white px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-gray-700 dark:bg-zinc-900 sm:px-6"
       >
-        <div className="mx-auto max-w-2xl space-y-2">
-          <div className="flex gap-2">
-            {(["text", "link", "task", "reminder"] as BubbleType[]).map((t) => (
-              <button
-                type="button"
-                key={t}
-                onClick={() => setType(t)}
-                className={`${btn} capitalize ${
-                  type === t ? "bg-indigo-600 text-white border-indigo-600" : ""
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+        <div className="grid grid-cols-4 gap-2">
+          {(["text", "link", "task", "reminder"] as BubbleType[]).map((t) => (
+            <button
+              type="button"
+              key={t}
+              onClick={() => setType(t)}
+              className={`${btn} w-full px-1 capitalize ${
+                type === t ? "border-indigo-600 bg-indigo-600 text-white" : ""
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
 
-          {needsDate && (
-            <input
-              type="datetime-local"
-              className={input}
-              value={when}
-              onChange={(e) => setWhen(e.target.value)}
-              aria-label={type === "task" ? "Due date (optional)" : "Remind at"}
-            />
-          )}
+        {needsDate && (
+          <input
+            type="datetime-local"
+            className={input}
+            value={when}
+            onChange={(e) => setWhen(e.target.value)}
+            aria-label={type === "task" ? "Due date (optional)" : "Remind at"}
+          />
+        )}
 
-          <div className="flex gap-2">
-            <input
-              className={input}
-              placeholder={
-                type === "link"
-                  ? "Paste a link"
-                  : type === "task"
-                  ? "What needs doing?"
-                  : type === "reminder"
-                  ? "Remind me to..."
-                  : "Write a note"
-              }
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-            />
-            <button className="rounded-lg bg-indigo-600 px-5 text-white">Add</button>
-          </div>
+        <div className="flex gap-2">
+          <input
+            className={`${input} min-w-0 flex-1`}
+            placeholder={
+              type === "link"
+                ? "Paste a link"
+                : type === "task"
+                ? "What needs doing?"
+                : type === "reminder"
+                ? "Remind me to..."
+                : "Write a note"
+            }
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+          />
+          <button className="min-h-11 shrink-0 rounded-lg bg-indigo-600 px-5 font-medium text-white">
+            Add
+          </button>
         </div>
       </form>
     </main>

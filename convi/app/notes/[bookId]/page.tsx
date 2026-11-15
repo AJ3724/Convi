@@ -7,9 +7,10 @@ import { createClient } from "@/lib/supabase/client";
 
 type PageRow = { id: string; title: string; updated_at: string };
 
-const btn = "rounded-lg border border-gray-400 px-3 py-2 text-sm";
+const btn =
+  "inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-400 px-4 text-sm";
 const input =
-  "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent p-3";
+  "w-full min-h-11 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 text-base";
 
 export default function BookPage() {
   const { bookId } = useParams<{ bookId: string }>();
@@ -64,20 +65,22 @@ export default function BookPage() {
   }
 
   return (
-    <main className="min-h-screen p-6 max-w-2xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">📖 {bookTitle}</h1>
+    <main className="mx-auto min-h-dvh w-full max-w-2xl space-y-4 px-4 py-6 sm:px-6">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="min-w-0 truncate text-2xl font-bold sm:text-3xl">
+          📖 {bookTitle}
+        </h1>
         <Link href="/notes" className={btn}>Back</Link>
       </div>
 
       <form onSubmit={addPage} className="flex gap-2">
         <input
-          className={input}
+          className={`${input} min-w-0 flex-1`}
           placeholder="New page title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
-        <button className="rounded-lg bg-indigo-600 px-4 text-white whitespace-nowrap">
+        <button className="min-h-11 shrink-0 rounded-lg bg-indigo-600 px-4 font-medium text-white">
           + Add
         </button>
       </form>
@@ -88,15 +91,15 @@ export default function BookPage() {
         {pages.map((p) => (
           <li
             key={p.id}
-            className="flex items-center justify-between rounded-2xl border border-gray-300 dark:border-gray-700 p-4"
+            className="flex items-center gap-2 rounded-2xl border border-gray-300 dark:border-gray-700 p-3 pl-4"
           >
-            <Link href={`/notes/${bookId}/${p.id}`} className="flex-1">
-              <p className="font-semibold">📄 {p.title}</p>
+            <Link href={`/notes/${bookId}/${p.id}`} className="min-w-0 flex-1">
+              <p className="truncate font-semibold">📄 {p.title}</p>
               <p className="text-xs text-gray-500">
                 Updated {new Date(p.updated_at).toLocaleString()}
               </p>
             </Link>
-            <button className={btn + " text-red-500"} onClick={() => removePage(p)}>
+            <button className={`${btn} text-red-500`} onClick={() => removePage(p)}>
               Delete
             </button>
           </li>

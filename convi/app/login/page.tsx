@@ -4,6 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
+const input =
+  "w-full min-h-11 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 text-base";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -30,10 +33,10 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center p-6">
+    <main className="flex min-h-dvh items-center justify-center px-4 py-6">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-2xl border border-gray-300 dark:border-gray-700 p-6"
+        className="w-full max-w-sm space-y-4 rounded-2xl border border-gray-300 dark:border-gray-700 p-5 sm:p-6"
       >
         <h1 className="text-3xl font-bold">Convi</h1>
         <p className="text-sm text-gray-500">Sign in to your hub</p>
@@ -41,18 +44,20 @@ export default function LoginPage() {
         <input
           type="email"
           required
+          autoComplete="email"
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent p-3"
+          className={input}
         />
         <input
           type="password"
           required
+          autoComplete="current-password"
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent p-3"
+          className={input}
         />
 
         {error && <p className="text-sm text-red-500">{error}</p>}
@@ -60,7 +65,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 p-3 font-medium text-white disabled:opacity-50"
+          className="min-h-12 w-full rounded-lg bg-indigo-600 font-medium text-white disabled:opacity-50"
         >
           {loading ? "Signing in..." : "Sign in"}
         </button>
