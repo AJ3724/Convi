@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
@@ -28,6 +29,22 @@ export default async function DashboardPage() {
         Database check:{" "}
         {error ? `Error: ${error.message}` : `OK, ${count} books`}
       </p>
+
+      <div className="flex gap-2">
+        <Link
+          href="/notes"
+          className="inline-block rounded-lg bg-indigo-600 px-4 py-2 text-white"
+        >
+          Notes
+        </Link>
+        <Link
+          href="/contacts"
+          className="inline-block rounded-lg bg-indigo-600 px-4 py-2 text-white"
+        >
+          Contacts
+        </Link>
+      </div>
+
       <form action={signOut}>
         <button className="rounded-lg border border-gray-400 px-4 py-2">
           Log out
