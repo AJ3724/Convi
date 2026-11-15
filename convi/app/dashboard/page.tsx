@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import EnableNotifications from "@/components/EnableNotifications";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -44,6 +45,8 @@ export default async function DashboardPage() {
           Contacts
         </Link>
       </div>
+
+      <EnableNotifications />
 
       <form action={signOut}>
         <button className="rounded-lg border border-gray-400 px-4 py-2">
