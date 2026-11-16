@@ -15,7 +15,12 @@ type Bubble = {
   position: number;
   task_details: One<{ is_done: boolean; due_at: string | null }>;
   reminder_details: One<{ remind_at: string; is_sent: boolean }>;
-  link_details: One<{ url: string; title: string | null; favicon_url: string | null }>;
+  link_details: One<{
+    url: string;
+    title: string | null;
+    favicon_url: string | null;
+    description: string | null;
+  }>;
 };
 
 // PostgREST may return a 1-to-1 relation as an object or an array
@@ -44,6 +49,7 @@ export default function EditorPage() {
   // composer state
   const [type, setType] = useState<BubbleType>("text");
   const [content, setContent] = useState("");
+  const [desc, setDesc] = useState("");
   const [when, setWhen] = useState("");
 
   const load = useCallback(async () => {
@@ -122,12 +128,14 @@ export default function EditorPage() {
         url: linkInfo.url,
         title: linkInfo.host,
         favicon_url: `https://www.google.com/s2/favicons?domain=${linkInfo.host}&sz=64`,
+        description: desc.trim() || null,
       });
       detailsError = error?.message;
     }
 
     if (detailsError) setError(detailsError);
     setContent("");
+    setDesc("");
     setWhen("");
     load();
   }
@@ -136,6 +144,12 @@ export default function EditorPage() {
     if (value === b.content) return;
     await supabase.from("bubbles").update({ content: value }).eq("id", b.id);
     setBubbles((list) => list.map((x) => (x.id === b.id ? { ...x, content: value } : x)));
+  }
+
+  async function saveDescription(b: Bubble, value: string) {
+    const v = value.trim() || null;
+    await supabase.from("link_details").update({ description: v }).eq("bubble_id", b.id);
+    load();
   }
 
   async function toggleTask(b: Bubble, done: boolean) {
@@ -191,17 +205,26 @@ export default function EditorPage() {
 
                   <div className="min-w-0 flex-1">
                     {b.type === "link" && link ? (
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block truncate font-medium underline"
-                      >
-                        {link.title ?? link.url}
-                        <span className="block truncate text-xs font-normal text-gray-500 no-underline">
-                          {link.url}
-                        </span>
-                      </a>
+                      <>
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block truncate font-medium underline"
+                        >
+                          {link.title ?? link.url}
+                          <span className="block truncate text-xs font-normal text-gray-500 no-underline">
+                            {link.url}
+                          </span>
+                        </a>
+                        <textarea
+                          defaultValue={link.description ?? ""}
+                          onBlur={(e) => saveDescription(b, e.target.value)}
+                          placeholder="Add a description"
+                          rows={Math.max(1, (link.description ?? "").split("\n").length)}
+                          className="mt-1 w-full resize-none bg-transparent text-sm outline-none placeholder:text-gray-500"
+                        />
+                      </>
                     ) : (
                       <textarea
                         defaultValue={b.content}
@@ -270,6 +293,15 @@ export default function EditorPage() {
             value={when}
             onChange={(e) => setWhen(e.target.value)}
             aria-label={type === "task" ? "Due date (optional)" : "Remind at"}
+          />
+        )}
+
+        {type === "link" && (
+          <input
+            className={input}
+            placeholder="Description (optional)"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
           />
         )}
 
