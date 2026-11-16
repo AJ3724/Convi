@@ -41,6 +41,9 @@ export default async function DashboardPage() {
         <Link href="/contacts" className={bigBtn}>
           👤 Contacts
         </Link>
+        <Link href="/folders" className={`${bigBtn} col-span-2`}>
+          📁 Folders
+        </Link>
       </div>
 
       <EnableNotifications />
