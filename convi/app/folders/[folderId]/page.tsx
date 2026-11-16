@@ -16,6 +16,7 @@ type Place = {
   id: string;
   name: string;
   address: string | null;
+  description: string | null;
   map_url: string | null;
   phone: string | null;
   latitude: number | null;
@@ -71,6 +72,7 @@ export default function FolderPage() {
   // form state
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+  const [description, setDescription] = useState("");
   const [link, setLink] = useState("");
   const [phone, setPhone] = useState("");
   const [lat, setLat] = useState("");
@@ -82,7 +84,7 @@ export default function FolderPage() {
       supabase.from("folders").select("name").eq("id", folderId).single(),
       supabase
         .from("places")
-        .select("id, name, address, map_url, phone, latitude, longitude")
+        .select("id, name, address, description, map_url, phone, latitude, longitude")
         .eq("folder_id", folderId)
         .order("created_at", { ascending: false }),
     ]);
@@ -145,6 +147,7 @@ export default function FolderPage() {
       folder_id: folderId,
       name: name.trim(),
       address: address.trim() || null,
+      description: description.trim() || null,
       map_url: normalizeMapUrl(link) || null,
       phone: cleanPhone || null,
       latitude: coords?.lat ?? null,
@@ -152,10 +155,21 @@ export default function FolderPage() {
     });
     if (error) return setError(error.message);
 
-    setName(""); setAddress(""); setLink(""); setPhone("");
+    setName(""); setAddress(""); setDescription(""); setLink(""); setPhone("");
     setLat(""); setLng(""); setHint("");
     setShowForm(false);
     load();
+  }
+
+  async function saveDescription(p: Place, value: string) {
+    const v = value.trim() || null;
+    if (v === (p.description ?? null)) return;
+    const { error } = await supabase
+      .from("places")
+      .update({ description: v })
+      .eq("id", p.id);
+    if (error) return setError(error.message);
+    setPlaces((list) => list.map((x) => (x.id === p.id ? { ...x, description: v } : x)));
   }
 
   async function removePlace(p: Place) {
@@ -181,6 +195,7 @@ export default function FolderPage() {
     (p) =>
       p.name.toLowerCase().includes(q) ||
       (p.address ?? "").toLowerCase().includes(q) ||
+      (p.description ?? "").toLowerCase().includes(q) ||
       (p.phone ?? "").includes(q)
   );
 
@@ -194,7 +209,7 @@ export default function FolderPage() {
       <div className="flex gap-2">
         <input
           className={`${input} min-w-0 flex-1`}
-          placeholder="Search name, address or phone"
+          placeholder="Search name, address, description or phone"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -225,6 +240,13 @@ export default function FolderPage() {
             placeholder="Name, e.g. Mom's house"
             value={name}
             onChange={(e) => setName(e.target.value)}
+          />
+          <textarea
+            className={`${input} resize-none`}
+            rows={2}
+            placeholder="Description (optional)"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
           />
           <input
             className={input}
@@ -280,6 +302,14 @@ export default function FolderPage() {
                     {p.latitude!.toFixed(6)}, {p.longitude!.toFixed(6)}
                   </p>
                 )}
+                <textarea
+                  key={`${p.id}-${p.description ?? ""}`}
+                  defaultValue={p.description ?? ""}
+                  onBlur={(e) => saveDescription(p, e.target.value)}
+                  placeholder="Add a description"
+                  rows={Math.max(1, (p.description ?? "").split("\n").length)}
+                  className="mt-2 w-full resize-none bg-transparent text-sm outline-none placeholder:text-gray-500"
+                />
               </div>
 
               <div className="flex flex-wrap gap-2">
