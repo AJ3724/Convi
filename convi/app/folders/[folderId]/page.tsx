@@ -28,6 +28,17 @@ const btn =
 const input =
   "w-full min-h-11 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 text-base";
 
+// A-Z by address (works for Arabic too). Places with no address go last.
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+function byAddress(a: Place, b: Place) {
+  const x = (a.address ?? "").trim();
+  const y = (b.address ?? "").trim();
+  if (!x && !y) return collator.compare(a.name, b.name);
+  if (!x) return 1;
+  if (!y) return -1;
+  return collator.compare(x, y);
+}
+
 async function inspectLink(raw: string): Promise<{ coords: Coords | null; name: string | null }> {
   const link = normalizeMapUrl(raw) || raw.trim();
   let coords = parseCoordinates(link);
@@ -66,6 +77,7 @@ export default function FolderPage() {
   const [places, setPlaces] = useState<Place[]>([]);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -85,8 +97,7 @@ export default function FolderPage() {
       supabase
         .from("places")
         .select("id, name, address, description, map_url, phone, latitude, longitude")
-        .eq("folder_id", folderId)
-        .order("created_at", { ascending: false }),
+        .eq("folder_id", folderId),
     ]);
     setFolderName(f?.name ?? "");
     if (error) setError(error.message);
@@ -173,8 +184,9 @@ export default function FolderPage() {
   }
 
   async function removePlace(p: Place) {
-    if (!confirm(`Delete "${p.name}"?`)) return;
+    if (!confirm("Delete this place?")) return;
     await supabase.from("places").delete().eq("id", p.id);
+    setOpenId(null);
     load();
   }
 
@@ -190,14 +202,21 @@ export default function FolderPage() {
     setTimeout(() => setCopied(null), 1500);
   }
 
-  const q = search.toLowerCase();
-  const shown = places.filter(
-    (p) =>
-      p.name.toLowerCase().includes(q) ||
-      (p.address ?? "").toLowerCase().includes(q) ||
-      (p.description ?? "").toLowerCase().includes(q) ||
-      (p.phone ?? "").includes(q)
-  );
+  // Search by address, description or phone, then sort A-Z by address
+  const q = search.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
+  const shown = places
+    .filter((p) => {
+      if (!q) return true;
+      const phoneDigits = (p.phone ?? "").replace(/\D/g, "");
+      return (
+        (p.address ?? "").toLowerCase().includes(q) ||
+        (p.description ?? "").toLowerCase().includes(q) ||
+        (p.phone ?? "").includes(q) ||
+        (qDigits.length > 0 && phoneDigits.includes(qDigits))
+      );
+    })
+    .sort(byAddress);
 
   return (
     <main className="mx-auto min-h-dvh w-full max-w-2xl space-y-4 px-4 py-6 sm:px-6">
@@ -209,7 +228,7 @@ export default function FolderPage() {
       <div className="flex gap-2">
         <input
           className={`${input} min-w-0 flex-1`}
-          placeholder="Search name, address, description or phone"
+          placeholder="Search address, description or phone"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -286,64 +305,112 @@ export default function FolderPage() {
 
       <ul className="space-y-3">
         {shown.map((p) => {
-          const open = mapsLink(p);
+          const open = openId === p.id;
+          const mapUrl = mapsLink(p);
           const hasCoords = p.latitude !== null && p.longitude !== null;
+          const hasSummary = Boolean(p.description || p.phone || p.address);
+
           return (
             <li
               key={p.id}
-              className="space-y-3 rounded-2xl border border-gray-300 p-4 dark:border-gray-700"
+              className="overflow-hidden rounded-2xl border border-gray-300 dark:border-gray-700"
             >
-              <div className="min-w-0">
-                <p className="break-words font-semibold">📍 {p.name}</p>
-                {p.address && <p className="break-words text-sm text-gray-500">{p.address}</p>}
-                {p.phone && <p className="text-sm text-gray-500">{p.phone}</p>}
-                {hasCoords && (
-                  <p className="font-mono text-sm text-gray-500">
-                    {p.latitude!.toFixed(6)}, {p.longitude!.toFixed(6)}
-                  </p>
-                )}
-                <textarea
-                  key={`${p.id}-${p.description ?? ""}`}
-                  defaultValue={p.description ?? ""}
-                  onBlur={(e) => saveDescription(p, e.target.value)}
-                  placeholder="Add a description"
-                  rows={Math.max(1, (p.description ?? "").split("\n").length)}
-                  className="mt-2 w-full resize-none bg-transparent text-sm outline-none placeholder:text-gray-500"
-                />
-              </div>
+              {/* Collapsed view: description, phone, address */}
+              <button
+                type="button"
+                onClick={() => setOpenId(open ? null : p.id)}
+                aria-expanded={open}
+                className="flex w-full items-start gap-3 p-4 text-left"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  {hasSummary ? (
+                    <>
+                      {p.description && (
+                        <p className="break-words font-medium">{p.description}</p>
+                      )}
+                      {p.phone && <p className="text-sm text-gray-500">📞 {p.phone}</p>}
+                      {p.address && (
+                        <p className="break-words text-sm text-gray-500">📍 {p.address}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="break-words font-medium">{p.name}</p>
+                  )}
+                </div>
+                <span
+                  className={`shrink-0 text-gray-500 transition-transform ${
+                    open ? "rotate-180" : ""
+                  }`}
+                  aria-hidden
+                >
+                  ▾
+                </span>
+              </button>
 
-              <div className="flex flex-wrap gap-2">
-                {open && (
-                  <a href={open} target="_blank" rel="noopener noreferrer" className={btn}>
-                    🗺 Open map
-                  </a>
-                )}
-                {hasCoords && (
-                  <button className={btn} onClick={() => copyCoords(p)}>
-                    {copied === p.id ? "Copied ✓" : "📋 Copy coords"}
-                  </button>
-                )}
-                {p.phone && (
-                  <>
-                    <a href={dialUrl(p.phone)} className={btn}>📞 Dial</a>
-                    <a
-                      href={whatsappUrl(p.phone)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={btn}
+              {/* Expanded view: actions + details */}
+              {open && (
+                <div className="space-y-3 border-t border-gray-300 p-4 dark:border-gray-700">
+                  <div className="space-y-1 text-sm text-gray-500">
+                    <p className="break-words">
+                      <span className="font-medium">Name:</span> {p.name}
+                    </p>
+                    {hasCoords && (
+                      <p className="font-mono">
+                        {p.latitude!.toFixed(6)}, {p.longitude!.toFixed(6)}
+                      </p>
+                    )}
+                  </div>
+
+                  <textarea
+                    key={`${p.id}-${p.description ?? ""}`}
+                    defaultValue={p.description ?? ""}
+                    onBlur={(e) => saveDescription(p, e.target.value)}
+                    placeholder="Add a description"
+                    rows={Math.max(2, (p.description ?? "").split("\n").length)}
+                    className="w-full resize-none rounded-lg border border-gray-300 bg-transparent p-2 text-sm outline-none placeholder:text-gray-500 dark:border-gray-700"
+                  />
+
+                  <div className="flex flex-wrap gap-2">
+                    {mapUrl && (
+                      <a href={mapUrl} target="_blank" rel="noopener noreferrer" className={btn}>
+                        🗺 Open map
+                      </a>
+                    )}
+                    {hasCoords && (
+                      <button className={btn} onClick={() => copyCoords(p)}>
+                        {copied === p.id ? "Copied ✓" : "📋 Copy coords"}
+                      </button>
+                    )}
+                    {p.phone && (
+                      <>
+                        <a href={dialUrl(p.phone)} className={btn}>📞 Dial</a>
+                        <a
+                          href={whatsappUrl(p.phone)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={btn}
+                        >
+                          💬 WhatsApp
+                        </a>
+                      </>
+                    )}
+                    <button
+                      className={`${btn} ml-auto text-red-500`}
+                      onClick={() => removePlace(p)}
                     >
-                      💬 WhatsApp
-                    </a>
-                  </>
-                )}
-                <button className={`${btn} ml-auto text-red-500`} onClick={() => removePlace(p)}>
-                  Delete
-                </button>
-              </div>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )}
             </li>
           );
         })}
-        {shown.length === 0 && <p className="text-gray-500">No places yet.</p>}
+        {shown.length === 0 && (
+          <p className="text-gray-500">
+            {places.length === 0 ? "No places yet." : "No places match your search."}
+          </p>
+        )}
       </ul>
     </main>
   );
