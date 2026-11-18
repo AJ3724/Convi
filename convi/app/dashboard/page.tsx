@@ -48,7 +48,7 @@ export default async function DashboardPage() {
           ✉️ Emails
         </Link>
         <Link href="/locations" className={`${bigBtn} col-span-2`}>
-          🔥 Hot locations
+           Hot locations
         </Link>
       </div>
 
