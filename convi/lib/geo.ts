@@ -47,18 +47,79 @@ export async function reverseCity(lat: number, lng: number): Promise<string | nu
   }
 }
 
-// Google Maps directions link (it accepts up to 11 points: start, 9 waypoints, end).
-export function googleDirectionsUrl(pts: LatLng[]) {
-  if (pts.length < 2) return null;
-  const use = pts.slice(0, 11);
+// Google Maps directions link.
+// fromMyLocation = true: no origin is set, so Google starts from wherever you are when you open it.
+export function googleDirectionsUrl(pts: LatLng[], fromMyLocation = false) {
+  if (pts.length < (fromMyLocation ? 1 : 2)) return null;
+  const use = pts.slice(0, fromMyLocation ? 10 : 11);
   const f = (p: LatLng) => `${p.lat},${p.lng}`;
   const url = new URL("https://www.google.com/maps/dir/");
   url.searchParams.set("api", "1");
-  url.searchParams.set("origin", f(use[0]));
+  if (!fromMyLocation) url.searchParams.set("origin", f(use[0]));
   url.searchParams.set("destination", f(use[use.length - 1]));
-  if (use.length > 2) {
-    url.searchParams.set("waypoints", use.slice(1, -1).map(f).join("|"));
-  }
+  const via = fromMyLocation ? use.slice(0, -1) : use.slice(1, -1);
+  if (via.length) url.searchParams.set("waypoints", via.map(f).join("|"));
   url.searchParams.set("travelmode", "driving");
   return url.toString();
+}
+
+// Offline fallback ordering: nearest-neighbour, then 2-opt improvement (open path).
+// If origin is given it stays first; otherwise the best starting stop is chosen.
+export function orderByProximity<T extends LatLng>(origin: LatLng | null, items: T[]): T[] {
+  if (items.length < 2) return [...items];
+
+  const nodes: LatLng[] = origin ? [origin, ...items] : [...items];
+  const n = nodes.length;
+  const D = nodes.map((a) => nodes.map((b) => haversineKm(a, b)));
+  const lo = origin ? 1 : 0;
+  const starts = origin ? [0] : nodes.map((_, i) => i);
+
+  let best: number[] = [];
+  let bestCost = Infinity;
+
+  for (const s of starts) {
+    const left = new Set(nodes.map((_, i) => i));
+    left.delete(s);
+    const p = [s];
+    while (left.size) {
+      const cur = p[p.length - 1];
+      let nb = -1;
+      let nd = Infinity;
+      for (const j of left) {
+        if (D[cur][j] < nd) {
+          nd = D[cur][j];
+          nb = j;
+        }
+      }
+      p.push(nb);
+      left.delete(nb);
+    }
+
+    let improved = true;
+    while (improved) {
+      improved = false;
+      for (let i = lo; i < n - 1; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const before = i > 0 ? D[p[i - 1]][p[i]] : 0;
+          const after = j < n - 1 ? D[p[j]][p[j + 1]] : 0;
+          const nBefore = i > 0 ? D[p[i - 1]][p[j]] : 0;
+          const nAfter = j < n - 1 ? D[p[i]][p[j + 1]] : 0;
+          if (nBefore + nAfter < before + after - 1e-9) {
+            const seg = p.slice(i, j + 1).reverse();
+            p.splice(i, j - i + 1, ...seg);
+            improved = true;
+          }
+        }
+      }
+    }
+
+    let cost = 0;
+    for (let k = 1; k < p.length; k++) cost += D[p[k - 1]][p[k]];
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = [...p];
+    }
+  }
+
+  return best.slice(lo).map((idx) => items[origin ? idx - 1 : idx]);
 }

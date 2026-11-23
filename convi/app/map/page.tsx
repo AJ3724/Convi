@@ -5,13 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { coordsFromInput } from "@/lib/mapLinks";
-import {
-  formatDuration,
-  formatKm,
-  googleDirectionsUrl,
-  haversineKm,
-  reverseCity,
-} from "@/lib/geo";
+import { formatDuration, formatKm, googleDirectionsUrl, reverseCity } from "@/lib/geo";
+import { planTrip, type Leg } from "@/lib/routing";
 import type { MapPoint } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), {
@@ -33,7 +28,17 @@ type Item = {
   lng: number;
   source: string;
 };
-type Stop = { id: string; label: string; lat: number; lng: number; itemKey?: string };
+type Stop = { id: string; lat: number; lng: number; itemKey?: string };
+type Pos = { lat: number; lng: number; acc: number; at: number };
+type Mode = "off" | "origin" | "free";
+type PlanState = {
+  key: string;
+  orderIds: string[];
+  path: [number, number][] | null;
+  km: number;
+  sec: number | null;
+  legs: Record<string, Leg | null>;
+};
 
 type Maybe<T> = T | T[] | null;
 type PlaceRow = {
@@ -59,7 +64,31 @@ const first = <T,>(x: Maybe<T>): T | null => (Array.isArray(x) ? x[0] ?? null : 
 const norm = (c: string | null) => (c ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const NONE = "__none__";
+
+function planKey(mode: Mode, origin: Pos | null, stops: Stop[]) {
+  const o = mode === "origin" && origin ? `${origin.lat},${origin.lng}` : "";
+  const s = stops
+    .map((x) => `${x.id}:${x.lat},${x.lng}`)
+    .sort()
+    .join(";");
+  return `${mode}|${o}|${s}`;
+}
+
+function getPosition(): Promise<Omit<Pos, "at">> {
+  return new Promise((resolve, reject) => {
+    if (!("geolocation" in navigator)) return reject({ code: 0 });
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      (e) => reject(e),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  });
+}
+
+const legText = (l: Leg | null | undefined) =>
+  l ? `${formatKm(l.km)}${l.sec !== null ? ` · ${formatDuration(l.sec)}` : ""}` : "";
 
 const btn =
   "inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-400 px-3 text-sm";
@@ -80,19 +109,16 @@ export default function MapBuilderPage() {
   const [search, setSearch] = useState("");
 
   const [stops, setStops] = useState<Stop[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const [customInput, setCustomInput] = useState("");
   const [customLabel, setCustomLabel] = useState("");
   const [adding, setAdding] = useState(false);
-  const [locating, setLocating] = useState(false);
 
-  const [followRoads, setFollowRoads] = useState(true);
-  const [route, setRoute] = useState<{
-    key: string;
-    path: [number, number][];
-    km: number;
-    sec: number;
-  } | null>(null);
-  const [failedKey, setFailedKey] = useState("");
+  const [mode, setMode] = useState<Mode>("off");
+  const [origin, setOrigin] = useState<Pos | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [geoError, setGeoError] = useState("");
+  const [plan, setPlan] = useState<PlanState | null>(null);
 
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState("");
@@ -103,9 +129,7 @@ export default function MapBuilderPage() {
       supabase
         .from("places")
         .select("id, name, address, description, city, latitude, longitude, folders(name)"),
-      supabase
-        .from("hot_locations")
-        .select("id, name, description, city, latitude, longitude"),
+      supabase.from("hot_locations").select("id, name, description, city, latitude, longitude"),
     ]);
     if (pl.error) return setError(pl.error.message);
     if (hl.error) return setError(hl.error.message);
@@ -233,7 +257,7 @@ export default function MapBuilderPage() {
     setDetectMsg(`Done: ${found} found${notFound ? `, ${notFound} not found` : ""}.`);
   }
 
-  /* ---------- trip stops ---------- */
+  /* ---------- choosing stops ---------- */
 
   const selectedKeys = useMemo(
     () => new Set(stops.map((s) => s.itemKey).filter(Boolean) as string[]),
@@ -241,48 +265,44 @@ export default function MapBuilderPage() {
   );
 
   function toggleItem(i: Item) {
-    setStops((list) =>
-      list.some((s) => s.itemKey === i.key)
-        ? list.filter((s) => s.itemKey !== i.key)
-        : [
-            ...list,
-            { id: crypto.randomUUID(), label: i.name, lat: i.lat, lng: i.lng, itemKey: i.key },
-          ]
-    );
+    const existing = stops.find((s) => s.itemKey === i.key);
+    if (existing) {
+      setStops((list) => list.filter((s) => s.id !== existing.id));
+      return;
+    }
+    const id = uid();
+    setStops((list) => [...list, { id, lat: i.lat, lng: i.lng, itemKey: i.key }]);
+    setLabels((m) => ({ ...m, [id]: i.name }));
   }
 
   function selectAllShown() {
-    setStops((list) => {
-      const have = new Set(list.map((s) => s.itemKey));
-      const add = shown
-        .filter((i) => !have.has(i.key))
-        .map((i) => ({
-          id: crypto.randomUUID(),
-          label: i.name,
-          lat: i.lat,
-          lng: i.lng,
-          itemKey: i.key,
-        }));
-      return [...list, ...add];
-    });
-  }
-
-  function move(index: number, dir: -1 | 1) {
-    setStops((list) => {
-      const j = index + dir;
-      if (j < 0 || j >= list.length) return list;
-      const next = [...list];
-      [next[index], next[j]] = [next[j], next[index]];
+    const have = new Set(stops.map((s) => s.itemKey));
+    const add = shown.filter((i) => !have.has(i.key));
+    if (add.length === 0) return;
+    const newStops = add.map((i) => ({ id: uid(), lat: i.lat, lng: i.lng, itemKey: i.key }));
+    setStops((list) => [...list, ...newStops]);
+    setLabels((m) => {
+      const next = { ...m };
+      newStops.forEach((s, k) => {
+        next[s.id] = add[k].name;
+      });
       return next;
     });
   }
 
   function rename(id: string, label: string) {
-    setStops((list) => list.map((s) => (s.id === id ? { ...s, label } : s)));
+    setLabels((m) => ({ ...m, [id]: label }));
   }
 
   function removeStop(id: string) {
     setStops((list) => list.filter((s) => s.id !== id));
+  }
+
+  function clearTrip() {
+    setStops([]);
+    setPlan(null);
+    setMode("off");
+    setGeoError("");
   }
 
   async function addCustom(e: React.FormEvent) {
@@ -297,103 +317,132 @@ export default function MapBuilderPage() {
         "Couldn't read a location from that. Paste a Google Maps link or type coordinates like 34.4367, 35.8497."
       );
     }
-    setStops((list) => [
-      ...list,
-      {
-        id: crypto.randomUUID(),
-        label: customLabel.trim() || name || `Stop ${list.length + 1}`,
-        lat: coords.lat,
-        lng: coords.lng,
-      },
-    ]);
+    const id = uid();
+    setStops((list) => [...list, { id, lat: coords.lat, lng: coords.lng }]);
+    setLabels((m) => ({
+      ...m,
+      [id]: customLabel.trim() || name || `Stop ${stops.length + 1}`,
+    }));
     setCustomInput("");
     setCustomLabel("");
   }
 
-  function addMyLocation() {
-    setError("");
-    if (!("geolocation" in navigator)) return setError("This browser can't read your location.");
+  /* ---------- my location + automatic route ---------- */
+
+  async function locate() {
+    setGeoError("");
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (p) => {
-        setLocating(false);
-        setStops((list) => [
-          ...list,
-          {
-            id: crypto.randomUUID(),
-            label: customLabel.trim() || "My location",
-            lat: p.coords.latitude,
-            lng: p.coords.longitude,
-          },
-        ]);
-        setCustomLabel("");
-      },
-      () => {
-        setLocating(false);
-        setError("Couldn't get your location. Allow location access and try again.");
-      },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-    );
+    try {
+      const p = await getPosition();
+      setOrigin({ ...p, at: Date.now() });
+      setMode("origin");
+    } catch (e) {
+      const code = (e as { code?: number }).code;
+      setGeoError(
+        code === 1
+          ? "Location permission was denied. Allow it in your browser's site settings, then try again."
+          : code === 2
+          ? "Your location is unavailable. Turn on GPS / location services and try again."
+          : code === 3
+          ? "Timed out getting your location. Try again, ideally outdoors or near a window."
+          : "This browser can't read your location."
+      );
+    } finally {
+      setLocating(false);
+    }
   }
 
-  /* ---------- route ---------- */
-
-  const coordsKey = stops.map((s) => `${s.lat},${s.lng}`).join("|");
-
+  // Re-plan whenever the stops or the starting point change
   useEffect(() => {
-    if (!followRoads || !coordsKey) return;
-    const pts = coordsKey.split("|").map((s) => s.split(",").map(Number));
-    if (pts.length < 2) return;
+    if (mode === "off" || stops.length === 0) return;
+    if (mode === "origin" && !origin) return;
 
+    const eo = mode === "origin" ? origin : null;
+    const key = planKey(mode, origin, stops);
     const ctrl = new AbortController();
+
     const timer = setTimeout(async () => {
       try {
-        const coords = pts.map(([la, ln]) => `${ln},${la}`).join(";");
-        const res = await fetch(
-          `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`,
-          { signal: ctrl.signal }
-        );
-        const data = await res.json();
-        const r = data?.routes?.[0];
-        if (data?.code !== "Ok" || !r) throw new Error("no route");
-        setRoute({
-          key: coordsKey,
-          path: r.geometry.coordinates.map(
-            ([ln, la]: [number, number]) => [la, ln] as [number, number]
-          ),
-          km: r.distance / 1000,
-          sec: r.duration,
+        const r = await planTrip(eo, stops, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        const legs: Record<string, Leg | null> = {};
+        r.ordered.forEach((s, i) => {
+          legs[s.id] = r.legs[i] ?? null;
+        });
+        setPlan({
+          key,
+          orderIds: r.ordered.map((s) => s.id),
+          path: r.path,
+          km: r.km,
+          sec: r.sec,
+          legs,
         });
       } catch {
-        if (!ctrl.signal.aborted) setFailedKey(coordsKey);
+        // cancelled because something changed
       }
-    }, 500);
+    }, 400);
 
     return () => {
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [coordsKey, followRoads]);
+  }, [mode, origin, stops]);
 
-  const road = followRoads && route && route.key === coordsKey ? route : null;
-  const routing = followRoads && stops.length >= 2 && !road && failedKey !== coordsKey;
-  const roadFailed = followRoads && stops.length >= 2 && failedKey === coordsKey && !road;
+  const eo = mode === "origin" ? origin : null;
+  const ready = mode !== "off" && stops.length > 0 && (mode === "free" || origin !== null);
+  const fresh = plan !== null && plan.key === planKey(mode, origin, stops);
+  const planning = ready && !fresh;
 
-  const straightKm = useMemo(() => {
-    let sum = 0;
-    for (let i = 1; i < stops.length; i++) sum += haversineKm(stops[i - 1], stops[i]);
-    return sum;
-  }, [stops]);
+  const orderedStops = useMemo(() => {
+    if (!plan) return stops;
+    const byId = new Map(stops.map((s) => [s.id, s]));
+    const seen = new Set<string>();
+    const out: Stop[] = [];
+    for (const id of plan.orderIds) {
+      const s = byId.get(id);
+      if (s) {
+        out.push(s);
+        seen.add(id);
+      }
+    }
+    for (const s of stops) if (!seen.has(s.id)) out.push(s);
+    return out;
+  }, [plan, stops]);
 
-  const points: MapPoint[] = useMemo(
-    () => stops.map((s) => ({ id: s.id, label: `${s.label}`, lat: s.lat, lng: s.lng })),
-    [stops]
-  );
+  const points: MapPoint[] = useMemo(() => {
+    const pts: MapPoint[] = [];
+    const o = mode === "origin" ? origin : null;
+    if (o) {
+      pts.push({
+        id: "origin",
+        label: "You are here",
+        lat: o.lat,
+        lng: o.lng,
+        color: "#2563eb",
+        text: "★",
+      });
+    }
+    orderedStops.forEach((s, i) => {
+      const isLast = i === orderedStops.length - 1 && (orderedStops.length > 1 || !!o);
+      const isFirst = i === 0 && !o && orderedStops.length > 1;
+      pts.push({
+        id: s.id,
+        label: labels[s.id] ?? "",
+        lat: s.lat,
+        lng: s.lng,
+        color: isLast ? "#dc2626" : isFirst ? "#16a34a" : "#4f46e5",
+        text: String(i + 1),
+      });
+    });
+    return pts;
+  }, [orderedStops, labels, mode, origin]);
 
-  const gmaps = googleDirectionsUrl(stops);
+  const showSummary = fresh && plan && (eo ? stops.length >= 1 : stops.length >= 2);
+  const gmaps = fresh ? googleDirectionsUrl(orderedStops, mode === "origin") : null;
+  const gmapsLimit = mode === "origin" ? 10 : 11;
   const shareText =
-    `Trip (${stops.length} stops)\n` +
-    stops.map((s, i) => `${i + 1}. ${s.label}`).join("\n") +
+    `Trip${mode === "origin" ? " from my location" : ""} (${orderedStops.length} stops)\n` +
+    orderedStops.map((s, i) => `${i + 1}. ${labels[s.id] ?? ""}`).join("\n") +
     (gmaps ? `\n${gmaps}` : "");
 
   const chipOn = "border-indigo-600 bg-indigo-600 text-white";
@@ -408,7 +457,7 @@ export default function MapBuilderPage() {
 
       {error && <p className="text-sm text-red-500">{error}</p>}
 
-      {/* ===== 1. Find locations ===== */}
+      {/* ===== 1. Pick locations ===== */}
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">1. Pick locations</h2>
 
@@ -518,13 +567,13 @@ export default function MapBuilderPage() {
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">2. Your trip ({stops.length})</h2>
           {stops.length > 0 && (
-            <button className={btn} onClick={() => setStops([])}>
+            <button className={btn} onClick={clearTrip}>
               Clear trip
             </button>
           )}
         </div>
 
-        {/* Add a stop */}
+        {/* Add a stop by link or coordinates */}
         <form
           onSubmit={addCustom}
           className="space-y-2 rounded-2xl border border-gray-300 p-3 dark:border-gray-700"
@@ -543,130 +592,173 @@ export default function MapBuilderPage() {
             value={customLabel}
             onChange={(e) => setCustomLabel(e.target.value)}
           />
-          <div className="flex gap-2">
-            <button
-              disabled={adding || !customInput.trim()}
-              className="min-h-11 flex-1 rounded-lg bg-indigo-600 font-medium text-white disabled:opacity-50"
-            >
-              {adding ? "Reading..." : "+ Add stop"}
-            </button>
-            <button type="button" className={btn} onClick={addMyLocation} disabled={locating}>
-              {locating ? "..." : "📍 My location"}
-            </button>
-          </div>
+          <button
+            disabled={adding || !customInput.trim()}
+            className="min-h-11 w-full rounded-lg bg-indigo-600 font-medium text-white disabled:opacity-50"
+          >
+            {adding ? "Reading..." : "+ Add stop"}
+          </button>
         </form>
 
         {stops.length === 0 ? (
           <p className="text-gray-500">
-            Tick locations above, or add stops by link, coordinates or your current position.
+            Tick locations above, or add stops by link or coordinates. You can add them in any
+            order, since the best order is worked out for you.
           </p>
         ) : (
           <>
-            <ol className="space-y-2">
-              {stops.map((s, i) => (
-                <li
-                  key={s.id}
-                  className="flex items-center gap-2 rounded-xl border border-gray-300 p-2 dark:border-gray-700"
+            {/* Create / refresh */}
+            {mode === "off" ? (
+              <div className="space-y-2">
+                <button
+                  onClick={locate}
+                  disabled={locating}
+                  className="flex min-h-14 w-full items-center justify-center rounded-xl bg-indigo-600 text-lg font-medium text-white disabled:opacity-60"
                 >
-                  <span
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white"
-                    style={{
-                      background:
-                        i === 0 && stops.length > 1
-                          ? "#16a34a"
-                          : i === stops.length - 1 && stops.length > 1
-                          ? "#dc2626"
-                          : "#4f46e5",
-                    }}
-                  >
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <input
-                      className="w-full min-h-10 bg-transparent text-base font-medium outline-none"
-                      value={s.label}
-                      onChange={(e) => rename(s.id, e.target.value)}
-                      aria-label={`Label for stop ${i + 1}`}
-                    />
-                    <p className="font-mono text-xs text-gray-500">
-                      {s.lat.toFixed(5)}, {s.lng.toFixed(5)}
-                    </p>
+                  {locating ? "Getting your location..." : "🗺 Create map from my location"}
+                </button>
+                {geoError && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-red-500">{geoError}</p>
+                    <button
+                      className={btn}
+                      onClick={() => {
+                        setGeoError("");
+                        setMode("free");
+                      }}
+                    >
+                      Continue without my location
+                    </button>
                   </div>
-                  <button className={smallBtn} onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">
-                    ▲
-                  </button>
-                  <button
-                    className={smallBtn}
-                    onClick={() => move(i, 1)}
-                    disabled={i === stops.length - 1}
-                    aria-label="Move down"
-                  >
-                    ▼
-                  </button>
-                  <button
-                    className={`${smallBtn} text-red-500`}
-                    onClick={() => removeStop(s.id)}
-                    aria-label="Remove stop"
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ol>
-
-            <label className="flex min-h-11 items-center gap-3 text-sm">
-              <input
-                type="checkbox"
-                className="h-5 w-5"
-                checked={followRoads}
-                onChange={(e) => setFollowRoads(e.target.checked)}
-              />
-              Follow roads (driving route)
-            </label>
-
-            <RouteMap points={points} path={road ? road.path : null} />
-
-            {stops.length >= 2 && (
-              <div className="space-y-1 text-sm">
-                {routing && <p className="text-gray-500">Calculating route...</p>}
-                {road && (
-                  <p className="font-medium">
-                    🚗 {formatKm(road.km)} · {formatDuration(road.sec)} by car
+                )}
+                <p className="text-xs text-gray-500">
+                  The stops will be ordered automatically, starting from where you are now.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-xl bg-gray-100 p-3 text-sm dark:bg-zinc-900">
+                {mode === "origin" && origin ? (
+                  <p>
+                    📍 Starting from your location (±{Math.round(origin.acc)} m, updated{" "}
+                    {new Date(origin.at).toLocaleTimeString()})
                   </p>
+                ) : (
+                  <p>Planned without your location. The best starting stop was chosen.</p>
                 )}
-                {!road && !routing && (
-                  <p className="font-medium">≈ {formatKm(straightKm)} in a straight line</p>
-                )}
-                {roadFailed && (
-                  <p className="text-amber-600">
-                    Couldn&apos;t load the road route, so straight dashed lines are shown.
-                  </p>
-                )}
+                <button className={btn} onClick={locate} disabled={locating}>
+                  {locating
+                    ? "Locating..."
+                    : mode === "origin"
+                    ? "🔄 Refresh my location"
+                    : "📍 Start from my location"}
+                </button>
+                {geoError && <p className="text-red-500">{geoError}</p>}
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-              {gmaps && (
-                <a href={gmaps} target="_blank" rel="noopener noreferrer" className={btn}>
-                  🧭 Open in Google Maps
-                </a>
-              )}
-              {gmaps && (
-                <a
-                  href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={btn}
-                >
-                  💬 Share
-                </a>
-              )}
-            </div>
-            {stops.length > 11 && (
-              <p className="text-xs text-amber-600">
-                Google Maps links support 11 stops, so only the first 11 are included there. The map
-                above shows all of them.
-              </p>
+            {/* Stops in visiting order */}
+            <ol className="space-y-2">
+              {orderedStops.map((s, i) => {
+                const leg = fresh && plan ? plan.legs[s.id] : null;
+                const last = i === orderedStops.length - 1 && (orderedStops.length > 1 || !!eo);
+                const lt = legText(leg);
+                return (
+                  <li
+                    key={s.id}
+                    className="flex items-center gap-2 rounded-xl border border-gray-300 p-2 dark:border-gray-700"
+                  >
+                    <span
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white"
+                      style={{
+                        background:
+                          mode === "off"
+                            ? "#6b7280"
+                            : last
+                            ? "#dc2626"
+                            : i === 0 && !eo && orderedStops.length > 1
+                            ? "#16a34a"
+                            : "#4f46e5",
+                      }}
+                    >
+                      {mode === "off" ? "•" : i + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <input
+                        className="w-full min-h-10 bg-transparent text-base font-medium outline-none"
+                        value={labels[s.id] ?? ""}
+                        onChange={(e) => rename(s.id, e.target.value)}
+                        aria-label={`Label for stop ${i + 1}`}
+                      />
+                      <p className="font-mono text-xs text-gray-500">
+                        {s.lat.toFixed(5)}, {s.lng.toFixed(5)}
+                      </p>
+                      {lt && (
+                        <p className="text-xs text-gray-500">
+                          ↳ {lt} {i === 0 && eo ? "from you" : "from the previous stop"}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      className={`${smallBtn} text-red-500`}
+                      onClick={() => removeStop(s.id)}
+                      aria-label="Remove stop"
+                    >
+                      ✕
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+
+            {mode !== "off" && (
+              <>
+                <RouteMap points={points} path={fresh && plan ? plan.path : null} />
+
+                <div className="space-y-1 text-sm">
+                  {planning && <p className="text-gray-500">Finding the best route...</p>}
+                  {showSummary && plan && (
+                    <>
+                      <p className="font-medium">
+                        {plan.sec !== null
+                          ? `🚗 ${formatKm(plan.km)} · ${formatDuration(plan.sec)} by car`
+                          : `≈ ${formatKm(plan.km)} in a straight line`}
+                      </p>
+                      {!plan.path && (
+                        <p className="text-amber-600">
+                          Couldn&apos;t load road routes right now, so the order is based on
+                          straight-line distance and dashed lines are shown. Try refreshing in a
+                          moment.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {gmaps && (
+                    <a href={gmaps} target="_blank" rel="noopener noreferrer" className={btn}>
+                      🧭 Open in Google Maps
+                    </a>
+                  )}
+                  {gmaps && (
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={btn}
+                    >
+                      💬 Share
+                    </a>
+                  )}
+                </div>
+                {orderedStops.length > gmapsLimit && (
+                  <p className="text-xs text-amber-600">
+                    Google Maps links support {gmapsLimit} stops{mode === "origin" ? " from your location" : ""},
+                    so only the first {gmapsLimit} are included there. The map above shows all of
+                    them.
+                  </p>
+                )}
+              </>
             )}
           </>
         )}

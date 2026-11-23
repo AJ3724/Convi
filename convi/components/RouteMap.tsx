@@ -4,7 +4,14 @@ import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-export type MapPoint = { id: string; label: string; lat: number; lng: number };
+export type MapPoint = {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  color: string;
+  text: string;
+};
 
 type Props = {
   points: MapPoint[];
@@ -52,14 +59,10 @@ export default function RouteMap({ points, path }: Props) {
       }).addTo(g);
     }
 
-    points.forEach((p, i) => {
-      const isFirst = i === 0 && points.length > 1;
-      const isLast = i === points.length - 1 && points.length > 1;
+    points.forEach((p) => {
       const pin = document.createElement("div");
-      pin.textContent = String(i + 1);
-      pin.style.cssText = `display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9999px;background:${
-        isFirst ? "#16a34a" : isLast ? "#dc2626" : "#4f46e5"
-      };color:#fff;font:600 13px system-ui,sans-serif;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)`;
+      pin.textContent = p.text;
+      pin.style.cssText = `display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9999px;background:${p.color};color:#fff;font:600 13px system-ui,sans-serif;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)`;
 
       const marker = L.marker([p.lat, p.lng], {
         icon: L.divIcon({ html: pin, className: "", iconSize: [28, 28], iconAnchor: [14, 14] }),
@@ -70,7 +73,7 @@ export default function RouteMap({ points, path }: Props) {
       marker.bindTooltip(tip, { permanent: true, direction: "right", offset: [14, 0] });
     });
 
-    // Re-fit the view only when the coordinates or route change, not on label edits
+    // Re-fit the view only when coordinates or the route change, not on label edits
     const key = `${latlngs.map((l) => `${l.lat},${l.lng}`).join("|")}#${line ? line.length : 0}`;
     if (latlngs.length && key !== lastFit.current) {
       lastFit.current = key;
