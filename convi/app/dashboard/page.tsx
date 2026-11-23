@@ -23,7 +23,7 @@ export default async function DashboardPage() {
   }
 
   const bigBtn =
-    "flex min-h-14 items-center justify-center rounded-xl bg-indigo-600 px-4 text-lg font-medium text-white";
+    "flex min-h-14 items-center justify-center rounded-xl bg-indigo-600 px-3 text-center text-lg font-medium text-white";
 
   return (
     <main className="mx-auto min-h-dvh w-full max-w-2xl space-y-4 px-4 py-6 sm:px-6">
@@ -47,8 +47,11 @@ export default async function DashboardPage() {
         <Link href="/emails" className={bigBtn}>
           ✉️ Emails
         </Link>
-        <Link href="/locations" className={`${bigBtn} col-span-2`}>
+        <Link href="/locations" className={bigBtn}>
           🔥 Hot locations
+        </Link>
+        <Link href="/map" className={bigBtn}>
+          🗺 Map builder
         </Link>
       </div>
 
