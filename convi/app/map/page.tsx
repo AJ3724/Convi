@@ -29,6 +29,7 @@ type Item = {
   source: string;
 };
 type Stop = { id: string; lat: number; lng: number; itemKey?: string };
+type SavedStop = Stop & { label: string };
 type Pos = { lat: number; lng: number; acc: number; at: number };
 type Mode = "off" | "origin" | "free";
 type PlanState = {
@@ -39,6 +40,23 @@ type PlanState = {
   sec: number | null;
   legs: Record<string, Leg | null>;
 };
+type SavedMap = {
+  id: string;
+  name: string;
+  mode: Mode;
+  origin: Pos | null;
+  stops: SavedStop[];
+  updated_at: string;
+};
+type Draft = {
+  stops: Stop[];
+  labels: Record<string, string>;
+  mode: Mode;
+  origin: Pos | null;
+  mapId: string | null;
+  name: string;
+};
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 type Maybe<T> = T | T[] | null;
 type PlaceRow = {
@@ -60,12 +78,27 @@ type HotRow = {
   longitude: number;
 };
 
+const DRAFT_KEY = "convi:map-draft:v1";
+
 const first = <T,>(x: Maybe<T>): T | null => (Array.isArray(x) ? x[0] ?? null : x);
 const norm = (c: string | null) => (c ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const NONE = "__none__";
+
+const cleanOrigin = (o: Pos | null | undefined): Pos | null =>
+  o && Number.isFinite(o.lat) && Number.isFinite(o.lng)
+    ? { lat: o.lat, lng: o.lng, acc: o.acc ?? 0, at: o.at ?? 0 }
+    : null;
+
+const cleanStop = (x: SavedStop): SavedStop => ({
+  id: x.id,
+  lat: x.lat,
+  lng: x.lng,
+  label: x.label ?? "",
+  ...(x.itemKey ? { itemKey: x.itemKey } : {}),
+});
 
 function planKey(mode: Mode, origin: Pos | null, stops: Stop[]) {
   const o = mode === "origin" && origin ? `${origin.lat},${origin.lng}` : "";
@@ -124,6 +157,19 @@ export default function MapBuilderPage() {
   const [detectMsg, setDetectMsg] = useState("");
   const cancelDetect = useRef(false);
 
+  // saved maps
+  const [maps, setMaps] = useState<SavedMap[]>([]);
+  const [mapsError, setMapsError] = useState("");
+  const [mapId, setMapId] = useState<string | null>(null);
+  const [mapName, setMapName] = useState("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [hydrated, setHydrated] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const lastSaved = useRef<string | null>(null);
+  const tripRef = useRef<HTMLElement>(null);
+
+  /* ---------- loading data ---------- */
+
   const load = useCallback(async () => {
     const [pl, hl] = await Promise.all([
       supabase
@@ -172,9 +218,64 @@ export default function MapBuilderPage() {
     setHidden(skipped);
   }, [supabase]);
 
+  const loadMaps = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("saved_maps")
+      .select("id, name, mode, origin, stops, updated_at")
+      .order("updated_at", { ascending: false });
+    if (error) {
+      setMapsError(
+        error.message.includes("saved_maps")
+          ? "Saved maps table not found. Run the saved_maps SQL in Supabase first."
+          : error.message
+      );
+      return;
+    }
+    setMapsError("");
+    setMaps((data ?? []) as unknown as SavedMap[]);
+  }, [supabase]);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadMaps();
+  }, [load, loadMaps]);
+
+  /* ---------- restore the unsaved draft on this device ---------- */
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw) as Draft;
+        if (Array.isArray(d.stops) && d.stops.length > 0) {
+          const o = cleanOrigin(d.origin);
+          setStops(d.stops);
+          setLabels(d.labels ?? {});
+          setMode(d.mode === "origin" && !o ? "off" : d.mode ?? "off");
+          setOrigin(o);
+          setMapId(d.mapId ?? null);
+          setMapName(d.name ?? "");
+          setRestored(true);
+        }
+      }
+    } catch {
+      // ignore a broken draft
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      if (stops.length === 0 && !mapId) localStorage.removeItem(DRAFT_KEY);
+      else {
+        const d: Draft = { stops, labels, mode, origin, mapId, name: mapName };
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+      }
+    } catch {
+      // storage can be unavailable (private mode); saving to the database still works
+    }
+  }, [hydrated, stops, labels, mode, origin, mapId, mapName]);
 
   /* ---------- city filter ---------- */
 
@@ -298,13 +399,6 @@ export default function MapBuilderPage() {
     setStops((list) => list.filter((s) => s.id !== id));
   }
 
-  function clearTrip() {
-    setStops([]);
-    setPlan(null);
-    setMode("off");
-    setGeoError("");
-  }
-
   async function addCustom(e: React.FormEvent) {
     e.preventDefault();
     if (!customInput.trim()) return;
@@ -352,7 +446,6 @@ export default function MapBuilderPage() {
     }
   }
 
-  // Re-plan whenever the stops or the starting point change
   useEffect(() => {
     if (mode === "off" || stops.length === 0) return;
     if (mode === "origin" && !origin) return;
@@ -437,13 +530,171 @@ export default function MapBuilderPage() {
     return pts;
   }, [orderedStops, labels, mode, origin]);
 
+  /* ---------- saving ---------- */
+
+  const payload = useMemo(
+    () => ({
+      mode,
+      origin: mode === "origin" ? origin : null,
+      stops: orderedStops.map((s) => cleanStop({ ...s, label: labels[s.id] ?? "" })),
+    }),
+    [mode, origin, orderedStops, labels]
+  );
+
+  async function saveMap(asCopy = false) {
+    setError("");
+    if (stops.length === 0) return setError("Add at least one stop before saving.");
+    const base = mapName.trim() || `Map ${new Date().toLocaleDateString()}`;
+    const name = asCopy ? `${base} (copy)` : base;
+    setSaveState("saving");
+
+    if (mapId && !asCopy) {
+      const { data, error } = await supabase
+        .from("saved_maps")
+        .update({ name, ...payload })
+        .eq("id", mapId)
+        .select("id");
+      if (error) {
+        setSaveState("error");
+        return setError(error.message);
+      }
+      if (data && data.length > 0) {
+        setMapName(name);
+        lastSaved.current = JSON.stringify({ n: name, p: payload });
+        setSaveState("saved");
+        loadMaps();
+        return;
+      }
+      // the saved copy was deleted elsewhere: fall through and create it again
+    }
+
+    const { data, error } = await supabase
+      .from("saved_maps")
+      .insert({ name, ...payload })
+      .select("id")
+      .single();
+    if (error || !data) {
+      setSaveState("error");
+      return setError(error?.message ?? "Could not save.");
+    }
+    setMapId(data.id);
+    setMapName(name);
+    lastSaved.current = JSON.stringify({ n: name, p: payload });
+    setSaveState("saved");
+    loadMaps();
+  }
+
+  // Once a map is saved, every change is saved automatically
+  useEffect(() => {
+    if (!hydrated || !mapId || stops.length === 0) return;
+    const sig = JSON.stringify({ n: mapName.trim(), p: payload });
+    if (sig === lastSaved.current) return;
+
+    const timer = setTimeout(async () => {
+      setSaveState("saving");
+      const { data, error } = await supabase
+        .from("saved_maps")
+        .update({ name: mapName.trim() || "Untitled map", ...payload })
+        .eq("id", mapId)
+        .select("id");
+      if (error) return setSaveState("error");
+      if (!data || data.length === 0) {
+        setMapId(null);
+        return setSaveState("idle");
+      }
+      lastSaved.current = sig;
+      setSaveState("saved");
+      loadMaps();
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [hydrated, mapId, mapName, payload, stops.length, supabase, loadMaps]);
+
+  function confirmReplace() {
+    const unsaved = stops.length > 0 && !mapId;
+    return (
+      !unsaved ||
+      window.confirm("Your current map isn't saved. Replace it? (Tap Cancel, then Save map, to keep it.)")
+    );
+  }
+
+  function startNew() {
+    if (!confirmReplace()) return;
+    setStops([]);
+    setLabels({});
+    setMode("off");
+    setOrigin(null);
+    setPlan(null);
+    setMapId(null);
+    setMapName("");
+    setGeoError("");
+    setSaveState("idle");
+    setRestored(false);
+    lastSaved.current = null;
+  }
+
+  function openMap(m: SavedMap) {
+    if (m.id !== mapId && !confirmReplace()) return;
+    const o = cleanOrigin(m.origin);
+    const md: Mode = m.mode === "origin" && !o ? "off" : m.mode;
+    const cleaned = (m.stops ?? []).map(cleanStop);
+
+    lastSaved.current = JSON.stringify({
+      n: m.name.trim(),
+      p: { mode: md, origin: md === "origin" ? o : null, stops: cleaned },
+    });
+    setStops(cleaned.map(({ id, lat, lng, itemKey }) => ({ id, lat, lng, itemKey })));
+    setLabels(Object.fromEntries(cleaned.map((s) => [s.id, s.label])));
+    setMode(md);
+    setOrigin(o);
+    setPlan(null);
+    setMapId(m.id);
+    setMapName(m.name);
+    setGeoError("");
+    setError("");
+    setSaveState("saved");
+    setRestored(false);
+    setTimeout(() => tripRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }
+
+  async function renameSaved(m: SavedMap) {
+    const v = window.prompt("Rename map:", m.name);
+    if (v === null || !v.trim()) return;
+    if (m.id === mapId) return setMapName(v.trim()); // auto-save writes it
+    const { error } = await supabase.from("saved_maps").update({ name: v.trim() }).eq("id", m.id);
+    if (error) return setMapsError(error.message);
+    loadMaps();
+  }
+
+  async function deleteSaved(m: SavedMap) {
+    if (!window.confirm(`Delete the saved map "${m.name}"?`)) return;
+    const { error } = await supabase.from("saved_maps").delete().eq("id", m.id);
+    if (error) return setMapsError(error.message);
+    if (m.id === mapId) {
+      setMapId(null);
+      setSaveState("idle");
+    }
+    loadMaps();
+  }
+
+  /* ---------- derived display values ---------- */
+
   const showSummary = fresh && plan && (eo ? stops.length >= 1 : stops.length >= 2);
   const gmaps = fresh ? googleDirectionsUrl(orderedStops, mode === "origin") : null;
   const gmapsLimit = mode === "origin" ? 10 : 11;
   const shareText =
-    `Trip${mode === "origin" ? " from my location" : ""} (${orderedStops.length} stops)\n` +
+    `${mapName.trim() || "Trip"}${mode === "origin" ? " (from my location)" : ""} (${orderedStops.length} stops)\n` +
     orderedStops.map((s, i) => `${i + 1}. ${labels[s.id] ?? ""}`).join("\n") +
     (gmaps ? `\n${gmaps}` : "");
+
+  const saveLine =
+    saveState === "saving"
+      ? "Saving..."
+      : saveState === "error"
+      ? "Couldn't save. Check your connection, then tap Save again."
+      : mapId
+      ? "Saved ✓ Changes save automatically."
+      : "Not saved yet. It's kept on this device, but save it to open it anywhere.";
 
   const chipOn = "border-indigo-600 bg-indigo-600 text-white";
   const chipOff = "border-gray-400";
@@ -456,6 +707,50 @@ export default function MapBuilderPage() {
       </div>
 
       {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {/* ===== Saved maps ===== */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Saved maps ({maps.length})</h2>
+          <button className={btn} onClick={startNew}>+ New map</button>
+        </div>
+        {restored && stops.length > 0 && (
+          <p className="text-xs text-gray-500">↩ Restored your map from where you left off.</p>
+        )}
+        {mapsError && <p className="text-sm text-red-500">{mapsError}</p>}
+        <ul className="space-y-2">
+          {maps.map((m) => (
+            <li
+              key={m.id}
+              className="flex items-center gap-2 rounded-xl border border-gray-300 p-3 dark:border-gray-700"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="break-words font-medium">
+                  {m.name}
+                  {m.id === mapId && <span className="text-xs text-indigo-600"> · open</span>}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {m.stops?.length ?? 0} stops · {new Date(m.updated_at).toLocaleString()}
+                </p>
+              </div>
+              <button className={btn} onClick={() => openMap(m)}>Open</button>
+              <button className={smallBtn} onClick={() => renameSaved(m)} aria-label="Rename map">
+                ✏️
+              </button>
+              <button
+                className={`${smallBtn} text-red-500`}
+                onClick={() => deleteSaved(m)}
+                aria-label="Delete map"
+              >
+                🗑
+              </button>
+            </li>
+          ))}
+          {maps.length === 0 && !mapsError && (
+            <p className="text-gray-500">No saved maps yet. Build one below and save it.</p>
+          )}
+        </ul>
+      </section>
 
       {/* ===== 1. Pick locations ===== */}
       <section className="space-y-3">
@@ -563,17 +858,16 @@ export default function MapBuilderPage() {
       </section>
 
       {/* ===== 2. Trip ===== */}
-      <section className="space-y-3">
+      <section ref={tripRef} className="scroll-mt-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">2. Your trip ({stops.length})</h2>
           {stops.length > 0 && (
-            <button className={btn} onClick={clearTrip}>
+            <button className={btn} onClick={startNew}>
               Clear trip
             </button>
           )}
         </div>
 
-        {/* Add a stop by link or coordinates */}
         <form
           onSubmit={addCustom}
           className="space-y-2 rounded-2xl border border-gray-300 p-3 dark:border-gray-700"
@@ -607,6 +901,37 @@ export default function MapBuilderPage() {
           </p>
         ) : (
           <>
+            {/* Save this map */}
+            <div className="space-y-2 rounded-2xl border border-gray-300 p-3 dark:border-gray-700">
+              <input
+                className={input}
+                placeholder="Map name, e.g. Zgharta run"
+                value={mapName}
+                onChange={(e) => setMapName(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => saveMap(false)}
+                  disabled={saveState === "saving"}
+                  className="min-h-11 flex-1 rounded-lg bg-indigo-600 font-medium text-white disabled:opacity-50"
+                >
+                  💾 {mapId ? "Save now" : "Save map"}
+                </button>
+                {mapId && (
+                  <button className={btn} onClick={() => saveMap(true)}>
+                    Save a copy
+                  </button>
+                )}
+              </div>
+              <p
+                className={`text-xs ${
+                  saveState === "error" ? "text-red-500" : "text-gray-500"
+                }`}
+              >
+                {saveLine}
+              </p>
+            </div>
+
             {/* Create / refresh */}
             {mode === "off" ? (
               <div className="space-y-2">
@@ -640,7 +965,7 @@ export default function MapBuilderPage() {
                 {mode === "origin" && origin ? (
                   <p>
                     📍 Starting from your location (±{Math.round(origin.acc)} m, updated{" "}
-                    {new Date(origin.at).toLocaleTimeString()})
+                    {new Date(origin.at).toLocaleString()})
                   </p>
                 ) : (
                   <p>Planned without your location. The best starting stop was chosen.</p>
@@ -753,9 +1078,9 @@ export default function MapBuilderPage() {
                 </div>
                 {orderedStops.length > gmapsLimit && (
                   <p className="text-xs text-amber-600">
-                    Google Maps links support {gmapsLimit} stops{mode === "origin" ? " from your location" : ""},
-                    so only the first {gmapsLimit} are included there. The map above shows all of
-                    them.
+                    Google Maps links support {gmapsLimit} stops
+                    {mode === "origin" ? " from your location" : ""}, so only the first{" "}
+                    {gmapsLimit} are included there. The map above shows all of them.
                   </p>
                 )}
               </>
